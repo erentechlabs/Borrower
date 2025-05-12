@@ -1,63 +1,69 @@
 import SwiftUI
 import AppKit // Required for NSImage and NSWorkspace
 
-// MARK: - Model representing a dropped file item
-// This struct defines the data model for a file or folder that has been
-// dropped into the application. It conforms to Identifiable for use in lists
-// and Equatable to allow for comparisons between items (e.g., to avoid duplicates).
+// MARK: - Model representing a file or folder item
+// This struct defines the data model for a file or folder.
+// It conforms to Identifiable for use in SwiftUI lists/grids,
+// and Equatable to allow for comparisons (e.g., to avoid duplicates based on URL).
 struct FileItem: Identifiable, Equatable {
     // MARK: - Properties
-    
-    // let id = UUID()
-    // A unique identifier for each file item. This is automatically generated
-    // when a FileItem instance is created and is used by SwiftUI to uniquely
-    // identify items in lists or grids.
-    let id = UUID()
+
+    // let id: UUID
+    // A unique identifier for each FileItem instance.
+    // This is automatically generated when a FileItem instance is created and is used
+    // by SwiftUI to uniquely identify items in lists or grids, especially for animations and updates.
+    let id: UUID
 
     // let url: URL
-    // The file system URL of the dropped item. This stores the path to the
+    // The file system URL of the item. This stores the path to the
     // actual file or folder on the user's system.
     let url: URL
 
-    // var icon: NSImage
-    // A computed property that returns the system icon for the file or folder
-    // represented by the `url`. It uses `NSWorkspace` to fetch the appropriate icon.
-    var icon: NSImage {
-        // NSWorkspace.shared is a singleton object that provides information
-        // about the file system and can perform operations like opening files.
-        // The icon(forFile:) method retrieves the standard icon for a given file path.
-        NSWorkspace.shared.icon(forFile: url.path)
-    }
+    // let icon: NSImage
+    // The system icon for the file or folder.
+    // This is fetched once during initialization.
+    let icon: NSImage
 
-    // var isDirectory: Bool
-    // A computed property that determines if the item at the `url` is a directory.
-    // It also includes a special check to treat '.app' bundles as files rather than directories
-    // for typical user interaction purposes (e.g., double-clicking an app should launch it,
-    // not navigate into its bundle contents).
-    var isDirectory: Bool {
-        var isDir: ObjCBool = false // A boolean value passed by reference to fileExists(atPath:isDirectory:).
-        // FileManager.default is used to interact with the file system.
-        // fileExists(atPath:isDirectory:) checks if an item exists at the given path
-        // and, if it does, sets the `isDir` variable to true if the item is a directory.
-        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) {
-            // Special handling for .app bundles: Treat them as files.
-            // url.pathExtension gets the extension of the file (e.g., "txt", "app").
+    // let isDirectory: Bool
+    // A Boolean value indicating whether the item at the `url` is a directory.
+    // This is determined once during initialization.
+    // It includes special handling for '.app' bundles, treating them as files.
+    let isDirectory: Bool
+
+    // MARK: - Initializer
+    // Initializes a new FileItem with a given URL.
+    // It determines if the item is a directory and fetches its icon.
+    init(url: URL) {
+        self.id = UUID() // Generate a unique ID for this instance
+        self.url = url
+
+        // Determine if it's a directory and handle .app bundles
+        var isDirObjC: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirObjC) {
             if url.pathExtension.lowercased() == "app" {
-                return false // Explicitly return false for .app bundles.
+                self.isDirectory = false // Treat .app bundles as files
+            } else {
+                self.isDirectory = isDirObjC.boolValue
             }
-            // For other items, return the value determined by fileExists.
-            // isDir.boolValue converts the ObjCBool to a Swift Bool.
-            return isDir.boolValue
+        } else {
+            // If the file doesn't exist or there's an error, default to not being a directory.
+            // This could happen if the file is deleted between the drop and this initialization.
+            self.isDirectory = false
+            print("Warning: FileItem init - file does not exist or cannot be accessed at path: \(url.path)")
         }
-        // If the file does not exist or an error occurs, assume it's not a directory.
-        return false
+
+        // Fetch the system icon for the file/folder.
+        // NSWorkspace.shared is a singleton for file system interactions.
+        self.icon = NSWorkspace.shared.icon(forFile: url.path)
     }
     
     // MARK: - Equatable Conformance
     // static func == (lhs: FileItem, rhs: FileItem) -> Bool
-    // Implements the Equatable protocol, allowing two FileItem instances to be
-    // compared for equality. Two FileItems are considered equal if their `url`
-    // properties are the same. This is useful for checking for duplicates.
+    // Implements the Equatable protocol. Two FileItems are considered equal
+    // if their `url` properties are the same. This is useful for checking
+    // if an item with the same file path has already been added.
+    // Note: This compares content identity (same file on disk),
+    // while the `id` property handles instance identity (for SwiftUI).
     static func == (lhs: FileItem, rhs: FileItem) -> Bool {
         lhs.url == rhs.url
     }

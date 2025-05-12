@@ -2,212 +2,234 @@ import SwiftUI
 import UniformTypeIdentifiers // Required for using UTType, supporting drag-and-drop operations.
 import AppKit // Required for accessing NSImage (for file icons) and NSWorkspace (for opening files).
 
+// Assume FileItem struct exists and is Identifiable (e.g., by UUID or URL)
+// Example: struct FileItem: Identifiable { let id: UUID; let url: URL; /* ... */ }
+
 // MARK: - Main Content View
-// This struct defines the main user interface for the application.
-// It handles navigation through folders, display of files, and drag-and-drop functionality.
 struct ContentView: View {
     // MARK: State Variables
-    // These properties are managed by SwiftUI and will cause the view to re-render when they change.
-
-    /// An array of URLs representing the current folder navigation stack.
-    /// The last URL in the array is the currently displayed folder. An empty array means the root view.
     @State private var navigationPath: [URL] = []
-
-    /// An array of `FileItem` objects that were initially dropped into the application's drop area.
-    /// These form the "root" level of items if no folder is being browsed.
     @State private var rootItems: [FileItem] = []
-
-    /// An array of `FileItem` objects currently being displayed in the grid.
-    /// This list is derived either from `rootItems` or the contents of the folder specified by `navigationPath.last`.
     @State private var currentDisplayItems: [FileItem] = []
+    @State private var isTargeted: Bool = false // For drop target visual feedback
+    @State private var showDropArea: Bool = true // To toggle the drop area visibility
 
-    /// A Boolean value indicating whether a dragged item is currently hovering over the designated drop area.
-    /// Used for providing visual feedback during drag operations.
-    @State private var isTargeted: Bool = false
+    /// An ID that changes when the app becomes active. Used to force `FileIconView` instances to reconstruct,
+    /// ensuring their drag gestures are reset and allowing an item to be dragged multiple times.
+    @State private var appActivationID: UUID = UUID()
 
-    /// A Boolean value that controls the visibility of the drag-and-drop area at the top of the view.
-    @State private var showDropArea: Bool = true
+    /// Stores the ID of the item currently being dragged *out* of the application.
+    /// Used to remove the item from the list after the drag operation finishes (approximated by app reactivation).
+    @State private var draggingItemID: FileItem.ID? = nil // <-- Track item being dragged out
 
     // MARK: Grid Configuration
-    /// Defines the layout for the `LazyVGrid` that displays file and folder icons.
-    /// It uses an adaptive layout, meaning items will adjust their size to fit the available width,
-    /// with a minimum item width of 100 points and a spacing of 20 points between items.
     let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 100), spacing: 20)
     ]
 
     // MARK: Computed Properties
-    /// A string representing the name of the currently displayed path or folder.
-    /// Used for the navigation header.
     var currentPathForDisplay: String {
         if let currentFolderURL = navigationPath.last {
-            return currentFolderURL.lastPathComponent // Display the name of the current folder
+            return currentFolderURL.lastPathComponent
         }
-        return "Dropped Files" // Default title when viewing the root items
+        return "Dropped Files"
     }
 
     // MARK: Body
-    /// The description of the view's content and layout.
     var body: some View {
-        VStack(spacing: 0) { // Main vertical container for all UI elements.
-            
-            // Section for the button that toggles the visibility of the drop area.
+        VStack(spacing: 0) {
+            // MARK: Drop Area Toggle
             HStack {
-                Spacer() // Pushes the button to the trailing edge.
-                Button(action: {
-                    withAnimation { // Animate the appearance/disappearance of the drop area.
-                        showDropArea.toggle()
-                    }
-                }) {
-                    Label("Drop Area", systemImage: showDropArea ? "chevron.up" : "chevron.down") // Icon changes based on state.
-                        .labelStyle(IconOnlyLabelStyle()) // Display only the icon part of the Label.
-                        .padding(6)
-                        .background(Color.secondary.opacity(0.1)) // Subtle background for the button.
-                        .cornerRadius(8)
-                        .contentShape(Rectangle()) // Defines the button's tappable area.
+                Spacer()
+                Button(action: { withAnimation { showDropArea.toggle() } }) {
+                    Label("Drop Area", systemImage: showDropArea ? "chevron.up" : "chevron.down")
+                        .labelStyle(IconOnlyLabelStyle()).padding(6)
+                        .background(Color.secondary.opacity(0.1)).cornerRadius(8)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(PlainButtonStyle()) // Removes default button styling for a cleaner look.
-                .padding(.trailing, 12) // Space from the trailing edge of the window.
-                .padding(.top, 8)       // Space from the top of the window.
+                .buttonStyle(PlainButtonStyle()).padding(.trailing, 12).padding(.top, 8)
             }
 
-            // Conditional display of the DropTargetOverlay and a Divider.
+            // MARK: Drop Target Area
             if showDropArea {
-                DropTargetOverlay(rootItems: $rootItems, isTargeted: $isTargeted) // Custom view for handling file drops.
-                    .frame(height: 150) // Sets a fixed height for the drop area.
-                    .background(isTargeted ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.1)) // Visual feedback on drag hover.
-                    .cornerRadius(12)
-                    .padding() // Padding around the drop area.
-                    .transition(.move(edge: .top).combined(with: .opacity)) // Animation for showing/hiding.
-
-                Divider() // A visual separator line.
-                    .transition(.opacity) // Animation for the divider.
+                DropTargetOverlay(rootItems: $rootItems, isTargeted: $isTargeted)
+                    .frame(height: 150)
+                    .background(isTargeted ? Color.blue.opacity(0.3) : Color.secondary.opacity(0.1))
+                    .cornerRadius(12).padding().transition(.move(edge: .top).combined(with: .opacity))
+                Divider().transition(.opacity)
             }
-            
-            // Navigation header: "Back" button and current path display.
+
+            // MARK: Navigation Header
             HStack {
-                if !navigationPath.isEmpty { // Display "Back" button only when inside a folder.
-                    Button(action: navigateBack) {
-                        Label("Back", systemImage: "chevron.backward")
-                    }
-                    .padding(.leading) // Padding on the left of the "Back" button.
-                }
-                Text(currentPathForDisplay) // Display the name of the current folder or root.
-                    .font(.headline)
-                    .lineLimit(1) // Prevent the text from wrapping to multiple lines.
-                    .truncationMode(.middle) // Truncate long names in the middle (e.g., "VeryLong...Name.txt").
-                    .padding(.leading, navigationPath.isEmpty ? 16 : 8) // Adjust leading padding based on "Back" button's presence.
-                Spacer() // Pushes the title to the leading edge (after the back button if present).
-            }
-            .padding(.horizontal) // Horizontal padding for the header content.
-            .padding(.vertical, 8)   // Vertical padding for the header content.
-            .frame(height: 40)      // Fixed height for the navigation header.
+                 if !navigationPath.isEmpty {
+                     Button(action: navigateBack) { Label("Back", systemImage: "chevron.backward") }
+                         .padding(.leading)
+                 }
+                 Text(currentPathForDisplay).font(.headline).lineLimit(1).truncationMode(.middle)
+                     .padding(.leading, navigationPath.isEmpty ? 16 : 8)
+                 Spacer()
+             }
+             .padding(.horizontal).padding(.vertical, 8).frame(height: 40)
 
-            // Main content area: either a message or the grid of items.
+
+            // MARK: Main Content Grid
             if currentDisplayItems.isEmpty {
-                // If there are no items to display, show a relevant message.
-                Spacer() // Centers the message vertically.
+                 // Empty View Message
+                Spacer()
                 Text(navigationPath.isEmpty ? "Drag and drop files into the area above." : "This folder is empty.")
-                    .foregroundColor(.secondary) // Use a less prominent color for the message.
-                    .padding()
-                Spacer() // Centers the message vertically.
+                    .foregroundColor(.secondary).padding()
+                Spacer()
             } else {
-                // If there are items, display them in a scrollable grid.
+                // Grid of File Items
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 20) { // Grid that loads items lazily for performance.
+                    LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(currentDisplayItems) { item in
-                            FileIconView( // Custom view for each file/folder item.
+                            FileIconView(
                                 item: item,
-                                onDoubleTap: { handleItemDoubleTap(item) }, // Action for double-tapping the item.
-                                onDelete: { deleteItem(item) }              // Action for deleting the item.
+                                onDoubleTap: { handleItemDoubleTap(item) },
+                                onDelete: { deleteItem(item) } // Existing delete button action
                             )
-                            .onDrag { // Enable dragging of items out of the application.
-                                NSItemProvider(object: item.url as NSURL)
+                            // Use appActivationID in the ID to force resets, enabling multiple drags
+                            .id("\(item.id)-\(appActivationID)")
+                            // Handle dragging items *out* of the application
+                            .onDrag {
+                                // Record the ID of the item when its drag starts
+                                self.draggingItemID = item.id // <-- Record ID on drag start
+                                // Provide the file URL to the drag-and-drop system
+                                return NSItemProvider(object: item.url as NSURL)
                             }
+                            // Optional: Visual feedback for the item being dragged
+                            // .opacity(item.id == draggingItemID ? 0.5 : 1.0)
                         }
                     }
-                    .padding() // Padding around the grid content.
+                    .padding()
                 }
             }
         }
-        .frame(minWidth: 400, idealWidth: 700, minHeight: 300, idealHeight: 600) // Define window size constraints.
-        .onAppear(perform: updateCurrentDisplayItems) // Load initial items when the view first appears.
-        .onChange(of: navigationPath) { // React to changes in the navigation path (folder changes).
-            updateCurrentDisplayItems() // Update the displayed items accordingly.
+        .frame(minWidth: 400, idealWidth: 700, minHeight: 300, idealHeight: 600)
+        // MARK: Lifecycle and State Change Handlers
+        .onAppear(perform: updateCurrentDisplayItems)
+        .onChange(of: navigationPath) { // For macOS 12+ / iOS 15+
+            updateCurrentDisplayItems()
         }
-        .onChange(of: rootItems) { // React to changes in the list of root items (e.g., new files dropped).
-            if navigationPath.isEmpty { // Only update if currently viewing the root level.
+        .onChange(of: rootItems) { // For macOS 12+ / iOS 15+
+            if navigationPath.isEmpty { // Only update display if viewing root
                 updateCurrentDisplayItems()
             }
+        }
+        // Handle app reactivation to potentially remove dragged item and reset drag states
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // This notification fires when the app regains focus.
+            
+            // Check if an item was marked as being dragged out just before reactivation
+            if let itemIDToDelete = self.draggingItemID {
+                 print("App became active after potentially dragging item ID: \(itemIDToDelete). Removing item from list.")
+                 // Remove the item from the data source(s)
+                 deleteItemWithID(itemIDToDelete) // <-- REMOVE item from list
+                 // Clear the flag so it doesn't delete again on next activation
+                 self.draggingItemID = nil
+            }
+            
+            // Always refresh the activation ID on reactivation. This resets the .id()
+            // for all FileIconViews, ensuring their drag gestures are ready for the next use.
+            self.appActivationID = UUID()
         }
     }
 
     // MARK: - Action Handlers
 
-    /// Handles the double-tap action on a `FileItem`.
-    /// If the item is a directory, it navigates into it. Otherwise, it opens the file.
-    /// - Parameter item: The `FileItem` that was double-tapped.
+    /// Handles double-tap on a file item (navigate into folder or open file).
     func handleItemDoubleTap(_ item: FileItem) {
         if item.isDirectory {
-            navigationPath.append(item.url) // Add folder to navigation path to navigate into it.
+            navigationPath.append(item.url)
         } else {
-            NSWorkspace.shared.open(item.url) // Open the file with its default application.
+            NSWorkspace.shared.open(item.url)
         }
     }
 
-    /// Navigates back to the previous folder in the `navigationPath`.
+    /// Navigates back up one level in the folder hierarchy.
     func navigateBack() {
-        if !navigationPath.isEmpty {
-            _ = navigationPath.popLast() // Remove the last folder from the path to go up one level.
-        }
+         if !navigationPath.isEmpty {
+             _ = navigationPath.popLast()
+         }
     }
 
-    /// Deletes a `FileItem` from the current view and, if at the root, from `rootItems`.
-    /// This does not delete the item from the file system.
-    /// - Parameter item: The `FileItem` to be deleted from the view.
+    /// Deletes an item triggered by the 'X' button click.
     func deleteItem(_ item: FileItem) {
-        currentDisplayItems.removeAll { $0.id == item.id } // Remove from the currently visible list.
-        if navigationPath.isEmpty { // If at the root level,
-            rootItems.removeAll { $0.id == item.id } // also remove from the master list of root items.
-        }
+        print("Deleting item \(item.id) via explicit delete action.")
+        deleteItemWithID(item.id)
     }
+
+    /// Central function to remove an item from the relevant data lists based on its ID.
+    /// Called by both the 'X' button action and the post-drag removal logic.
+    /// - Parameter id: The ID of the `FileItem` to remove.
+    func deleteItemWithID(_ id: FileItem.ID) {
+        var itemRemoved = false
+        
+        // Remove from the currently displayed list first
+        if let index = currentDisplayItems.firstIndex(where: { $0.id == id }) {
+            currentDisplayItems.remove(at: index)
+            print("Removed item \(id) from currentDisplayItems.")
+            itemRemoved = true
+        }
+
+        // If we are currently viewing the root level, also remove from the master rootItems list
+        if navigationPath.isEmpty {
+            if let index = rootItems.firstIndex(where: { $0.id == id }) {
+                rootItems.remove(at: index)
+                print("Removed item \(id) from rootItems.")
+                itemRemoved = true
+            }
+        }
+        
+        if !itemRemoved {
+            print("Item \(id) was not found for deletion (perhaps already removed).")
+        }
+        
+        // Note: If navigating within a folder (not root), this only removes the item
+        // from the `currentDisplayItems` view. It does *not* delete the file from
+        // the actual folder on disk. If the user navigates away and back, the item
+        // might reappear unless the underlying folder content has actually changed.
+        // If `rootItems` represents *only* items dropped initially, then removing
+        // items dragged out from subfolders might require different logic if you
+        // want that removal to persist across navigation.
+        // For simplicity, this implementation removes from the visible list, and
+        // from the root list *if* the user is currently viewing the root.
+    }
+
 
     // MARK: - Data Loading
 
-    /// Updates the `currentDisplayItems` list based on the current `navigationPath`.
-    /// If the `navigationPath` is empty, it displays `rootItems`. Otherwise, it loads the contents of the current folder.
+    /// Updates the `currentDisplayItems` list based on the current navigation state.
     private func updateCurrentDisplayItems() {
+        print("Updating current display items...")
         var newItems: [FileItem] = []
-        if let currentFolderURL = navigationPath.last { // Check if currently inside a folder.
-            do {
-                // Attempt to read the contents of the directory.
-                let contentURLs = try FileManager.default.contentsOfDirectory(
-                    at: currentFolderURL,
-                    includingPropertiesForKeys: [.isDirectoryKey, .nameKey, .isPackageKey], // Properties to pre-fetch for efficiency.
-                    options: [.skipsHiddenFiles] // Exclude hidden files (e.g., .DS_Store).
-                )
-                // Convert the URLs to `FileItem` objects.
-                for url in contentURLs {
-                    newItems.append(FileItem(url: url))
-                }
-            } catch {
-                // Handle errors that occur while reading directory contents (e.g., permissions issues).
-                print("Error loading contents of \(currentFolderURL.path): \(error.localizedDescription)")
-                 if navigationPath.count > 0 { // Provides context if the error occurs in a subfolder.
-                     print("\(currentFolderURL.lastPathComponent) could not be loaded, showing empty content for this folder.")
-                 }
-            }
+        if let currentFolderURL = navigationPath.last {
+            // Load items from the current folder URL
+             do {
+                 let contentURLs = try FileManager.default.contentsOfDirectory(
+                     at: currentFolderURL,
+                     includingPropertiesForKeys: [.isDirectoryKey, .nameKey, .isPackageKey],
+                     options: [.skipsHiddenFiles]
+                 )
+                 newItems = contentURLs.map { FileItem(url: $0) } // Assuming FileItem init is available
+                 print("Loaded \(newItems.count) items from folder: \(currentFolderURL.lastPathComponent)")
+             } catch {
+                 print("Error loading contents of \(currentFolderURL.path): \(error.localizedDescription)")
+                 // Optionally clear items or show an error state
+                 newItems = []
+             }
         } else {
-            // If not in a folder (i.e., at the root), display the initially dropped items.
+            // At root: display the items stored in rootItems
             newItems = rootItems
+            print("Displaying \(newItems.count) root items.")
         }
-        
-        // Sort the items: folders first, then all items alphabetically by name.
+
+        // Sort the items (folders first, then alphabetically)
         currentDisplayItems = newItems.sorted {
-            if $0.isDirectory && !$1.isDirectory { return true }  // Folders come before files.
-            if !$0.isDirectory && $1.isDirectory { return false } // Files come after folders.
-            // Sort alphabetically by name for items of the same type (both files or both folders).
-            return $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending
+             if $0.isDirectory && !$1.isDirectory { return true }
+             if !$0.isDirectory && $1.isDirectory { return false }
+             return $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending
         }
     }
 }
